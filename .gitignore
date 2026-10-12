@@ -1,0 +1,20 @@
+# ---- 运行期产物（不纳入版本管理） ----
+allure-results/
+allure-report/
+.runtime/
+logs/
+screenshots/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# ---- IDE ----
+.idea/
+.vscode/
+
+# ---- 本地环境配置 ----
+.env
