@@ -18,6 +18,7 @@ import re
 
 import allure
 from playwright.sync_api import Locator
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect
 
 from config.settings import settings
@@ -328,8 +329,29 @@ class AnalysisDetailPage(BasePage):
 
     @allure.step("批量确认第 {index} 行数据")
     def audit_row(self, index: int = 0) -> None:
+        """点击行内“批量确认”按钮并确认。
+
+        注意：批量确认按钮仅在“未发布 且 行内存在待确认(WAITING)值”时展示，
+        因此该操作仅适用于导入患者等存在待确认值的行。
+        """
         self.row(index).locator("button[title='批量确认']").click()
         self.confirm_popconfirm(button_text="确认")
+
+    def row_audit_button(self, index: int = 0) -> Locator:
+        """指定行的“批量确认”按钮（新逻辑：仅当行内存在待确认值时渲染）。"""
+        return self.row(index).locator("button[title='批量确认']")
+
+    def wait_row_audit_button(self, index: int = 0, timeout: int = 45_000) -> bool:
+        """等待指定行出现“批量确认”按钮并返回是否出现。
+
+        导入患者的数据需后端异步提取：值状态先从“导入中(DOING)”转为
+        “待确认(WAITING)”后按钮才会渲染，因此这里做最长 45 秒轮询。
+        """
+        try:
+            self.row_audit_button(index).wait_for(state="visible", timeout=timeout)
+            return True
+        except PlaywrightTimeoutError:
+            return False
 
     @allure.step("删除第 {index} 行数据")
     def delete_row(self, index: int = 0) -> None:

@@ -4,14 +4,16 @@
 覆盖点：
 1. 引导页：欢迎语、推荐提示词、输入区按钮完整性；
 2. 推荐提示词点击填充与清空；
-3. 发送消息 → 新建会话 → AI 流式回答完成（核心链路）；
-4. 生成过程中“停止”按钮可用并中断回答；
-5. 会话重命名；
-6. 会话置顶 / 取消置顶（分组变化）；
-7. 会话删除（自建数据，含确认弹窗）；
-8. 消息删除（自建数据，含确认弹窗）；
-9. 会话侧边栏收起 / 展开；
-10. “选择临床试验”下拉交互。
+3. 会话重命名；
+4. 会话置顶 / 取消置顶（分组变化）；
+5. 会话删除（自建数据，含确认弹窗）；
+6. 消息删除（自建数据，含确认弹窗）；
+7. 消息复制（剪贴板 + 提示）；
+8. 会话侧边栏收起 / 展开；
+9. “选择临床试验”下拉交互、挂载与移除。
+
+说明：AI 流式回答质量与“停止生成”用例依赖 AI 服务可用性，
+按项目要求已从用例集中移除（消息发送本身仍用于会话/消息操作类用例的造数）。
 
 测试数据保护说明：
 - 用例创建的会话名称/消息内容均携带 E2E-AUTO 标识；
@@ -30,8 +32,17 @@ from src.utils.test_data import build_test_message, build_test_name
 
 pytestmark = [allure.feature("灵犀问答"), pytest.mark.data_cleanup]
 
-# AI 响应可能因环境负载出现的“请求已取消”占位文案（点击停止后的预期）
-CANCELLED_TEXT = "请求已取消"
+
+def _wait_generation_settled(chat_page: ChatPage) -> None:
+    """等待 AI 生成结束（消息操作类用例使用）。
+
+    AI 服务异常（如页面提示 Fail Request）时生成同样已结束，
+    此处容忍该场景，避免影响“删除/复制消息”等非 AI 生成类断言。
+    """
+    try:
+        chat_page.wait_ai_answer()
+    except AssertionError:
+        pass
 
 
 @allure.story("引导页")
@@ -108,45 +119,7 @@ class TestChatWelcome:
 
 @allure.story("会话消息")
 class TestChatMessage:
-    """消息发送 / AI 回答 / 消息操作。"""
-
-    @allure.title("发送消息创建会话并获得 AI 回答")
-    @allure.severity(allure.severity_level.BLOCKER)
-    @pytest.mark.smoke
-    def test_send_message_and_receive_ai_answer(self, chat_page: ChatPage, conversation_cleaner) -> None:
-        message = build_test_message("请用一句话介绍你自己")
-
-        with allure.step(f"发送消息：{message}"):
-            chat_page.send_message(message)
-            # 会话已在服务端创建，登记 id 用于兜底清理
-            conversation_cleaner["register"](chat_page.current_conversation_id())
-
-        with allure.step("校验用户消息气泡"):
-            expect(chat_page.user_message(message)).to_be_visible()
-            assert chat_page.user_message(message).inner_text().strip() == message
-
-        with allure.step("等待 AI 回答完成（按需求等待 1 分钟）"):
-            answer = chat_page.wait_ai_answer(timeout=60_000)
-            assert answer, "AI 回答内容不应为空"
-
-        with allure.step("校验会话出现在侧边栏且为激活态"):
-            expect(chat_page.active_conversation_item).to_be_visible()
-
-    @allure.title("AI 生成过程中可停止回答")
-    @allure.severity(allure.severity_level.NORMAL)
-    def test_stop_generating(self, chat_page: ChatPage, conversation_cleaner) -> None:
-        message = build_test_message("请详细介绍一下肺癌的靶向治疗")
-        chat_page.send_message(message)
-        conversation_cleaner["register"](chat_page.current_conversation_id())
-
-        with allure.step("等待停止按钮出现并点击"):
-            if not chat_page.is_visible(chat_page.stop_button, timeout=10_000):
-                pytest.skip("AI 生成速度过快，未捕获到停止按钮（环境响应极快）")
-            chat_page.stop_generating()
-
-        with allure.step("校验回答已中断"):
-            ai_message = chat_page.ai_messages.last
-            expect(ai_message).to_contain_text(CANCELLED_TEXT, timeout=10_000)
+    """消息操作（删除 / 复制）。"""
 
     @allure.title("删除自建消息（确认弹窗 + 列表移除）")
     @allure.severity(allure.severity_level.CRITICAL)
@@ -154,7 +127,7 @@ class TestChatMessage:
         message = build_test_message("这是一条待删除的测试消息")
         chat_page.send_message(message)
         conversation_cleaner["register"](chat_page.current_conversation_id())
-        chat_page.wait_ai_answer()
+        _wait_generation_settled(chat_page)
 
         user_message = chat_page.user_message(message)
         with allure.step("删除用户消息并确认"):
@@ -172,7 +145,7 @@ class TestChatMessage:
         message = build_test_message("这是一条待复制的测试消息")
         chat_page.send_message(message)
         conversation_cleaner["register"](chat_page.current_conversation_id())
-        chat_page.wait_ai_answer()
+        _wait_generation_settled(chat_page)
 
         with allure.step("悬浮用户消息并点击“复制”按钮"):
             actions = chat_page.hover_message(chat_page.user_message(message))

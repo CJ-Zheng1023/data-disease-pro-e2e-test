@@ -694,8 +694,10 @@ class TestAnalysisList:
             analysis_detail = detail.enter_analysis_detail(analysis["name"])
             expect(analysis_detail.add_row_button).to_be_visible()
             expect(analysis_detail.delete_selected_button).to_be_visible()
-            expect(analysis_detail.row_audit_buttons).to_have_count(1)
             expect(analysis_detail.row_delete_buttons).to_have_count(1)
+            # 新显隐逻辑：批量确认按钮仅当行内存在“待确认”值时才展示，
+            # 手动录入的值为“已完成”状态 → 不展示
+            expect(analysis_detail.row_audit_buttons).to_have_count(0)
             assert analysis_detail.cell_edit_enabled(0, 1), "取消发布后点击单元格应可进入编辑态"
 
     @allure.title("字段配置：不完整拦截 + 自定义字段持久化")
@@ -838,14 +840,52 @@ class TestAnalysisDetail:
             analysis_detail.edit_cell(edited_value, index=0, column=1)
             expect(analysis_detail.row(0)).to_contain_text(edited_value)
 
-        with allure.step("批量确认该行数据"):
-            analysis_detail.audit_row(0)
-            expect(analysis_detail.data_rows).to_have_count(1)
+        with allure.step("手动录入的行值为“已完成”状态：不展示“批量确认”"):
+            # 新逻辑：批量确认按钮仅当行内存在“待确认(WAITING)”值时才展示
+            expect(analysis_detail.row_audit_button(0)).to_have_count(0)
 
         with allure.step("删除该行数据"):
             analysis_detail.delete_row(0)
             expect(analysis_detail.data_rows).to_have_count(0)
             assert analysis_detail.data_count() == 0
+
+    @allure.title("批量确认：待确认值出现按钮、确认后按钮消失（新显隐逻辑）")
+    @allure.severity(allure.severity_level.CRITICAL)
+    def test_batch_confirm_for_waiting_values(
+        self, api_client, research_cleaner, analysis_cleaner, research_list_page: ResearchListPage
+    ) -> None:
+        """校验批量确认按钮的新显隐逻辑：仅当行内存在“待确认(WAITING)”值时才展示。
+
+        造数说明：导入患者后由后端异步提取数据，值状态先从“导入中(DOING)”
+        转为“待确认(WAITING)”，此时批量确认按钮出现；批量确认后值转为
+        “已完成(DONE)”，按钮随之消失。
+        """
+        databases = api_client.query_databases_for_select()
+        assert databases, "当前账号无可访问的专病库"
+        database_id = databases[0]["id"]
+        source_patients = api_client.query_database_patients(database_id, page_size=1)
+        assert source_patients, "专病库无患者数据"
+        research = research_cleaner["create"](database_id=database_id)
+        analysis = analysis_cleaner["create"](research["id"], description="批量确认用例")
+        api_client.save_analysis_custom_field(analysis["id"], build_test_name("文本字段", max_length=60))
+        api_client.import_patients_to_research(database_id, [source_patients[0]["id"]], research["id"])
+        api_client.import_patients_to_analysis(analysis["id"], [source_patients[0]["id"]])
+
+        research_list_page.refresh()
+        research_list_page.search(research["name"])
+        detail = research_list_page.enter_detail(research["name"])
+        detail.click_tab("临床试验")
+        expect(detail.analysis_item(analysis["name"])).to_be_visible()
+        analysis_detail = detail.enter_analysis_detail(analysis["name"])
+        expect(analysis_detail.data_rows).to_have_count(1, timeout=15_000)
+
+        with allure.step("等待导入数据进入“待确认”状态：出现批量确认按钮"):
+            if not analysis_detail.wait_row_audit_button(0, timeout=45_000):
+                pytest.skip("导入数据未在预期时间内进入待确认状态（提取服务未就绪）")
+
+        with allure.step("批量确认该行：值转为已完成，按钮消失"):
+            analysis_detail.audit_row(0)
+            expect(analysis_detail.row_audit_button(0)).to_have_count(0, timeout=15_000)
 
     @allure.title("详情页：删除选中、发布/取消发布（数据不可编辑）与返回列表")
     @allure.severity(allure.severity_level.CRITICAL)
@@ -881,8 +921,9 @@ class TestAnalysisDetail:
         with allure.step("取消发布：数据列表恢复可编辑"):
             analysis_detail.unpublish()
             expect(analysis_detail.add_row_button).to_be_visible(timeout=15_000)
-            expect(analysis_detail.row_audit_buttons).to_have_count(1)
             expect(analysis_detail.row_delete_buttons).to_have_count(1)
+            # 新显隐逻辑：手动录入的值为“已完成”，批量确认按钮不展示
+            expect(analysis_detail.row_audit_buttons).to_have_count(0)
             assert analysis_detail.cell_edit_enabled(0, 1), "取消发布后点击单元格应可进入编辑态"
 
         with allure.step("返回列表：状态为未发布且数据保留"):

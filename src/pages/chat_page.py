@@ -96,11 +96,6 @@ class ChatPage(BasePage):
         """“选择临床试验”按钮（关联分析数据）。"""
         return self.page.locator("button[title='选择临床试验']")
 
-    @property
-    def stop_button(self) -> Locator:
-        """AI 生成过程中的“停止”按钮。"""
-        return self.page.locator("button[title='停止']")
-
     def editor_text(self) -> str:
         """读取输入框当前文本（contenteditable 清空后会残留零宽字符，需要清洗）。"""
         return self.editor.inner_text().replace("\ufeff", "").strip()
@@ -227,26 +222,26 @@ class ChatPage(BasePage):
         """按内容定位用户消息。"""
         return self.user_messages.filter(has_text=text).first
 
-    @allure.step("等待 AI 回答完成")
+    @allure.step("等待 AI 生成结束")
     def wait_ai_answer(self, timeout: int | None = None) -> str:
-        """等待 AI 回答生成结束，返回回答文本。
+        """等待 AI 生成结束，返回回答文本。
 
         判定结束的依据：AI 消息上的“思考中/输入中”动画（icon-thinking）消失。
-        超时时间默认取配置中的 AI 超时（120s），保证慢模型场景也能稳定通过。
+        超时时间默认取配置中的 AI 超时（120s）。
+        若内容为空，会结合页面错误提示给出明确诊断（区分 AI 服务故障与用例问题）。
+        当前仅消息操作类用例用它等待生成“落定”，不再断言回答内容质量。
         """
         timeout = timeout or settings.ai_timeout_ms
         ai_message = self.ai_messages.last
         expect(ai_message).to_be_visible(timeout=timeout)
         # 等待加载/输入动画消失：出现时可见，结束后从 DOM 中移除该类名
         expect(self.page.locator(".message-item.start .icon-thinking")).to_have_count(0, timeout=timeout)
-        return ai_message.locator(".message-item-content").inner_text().strip()
-
-    @allure.step("停止 AI 生成")
-    def stop_generating(self) -> "ChatPage":
-        """点击“停止”按钮中断生成。"""
-        expect(self.stop_button).to_be_visible()
-        self.stop_button.click()
-        return self
+        text = ai_message.locator(".message-item-content").inner_text().strip()
+        if not text:
+            error = next((t for t in self.toast_texts() if "Fail" in t or "失败" in t), "")
+            detail = f"（页面错误提示：{error}）" if error else ""
+            raise AssertionError(f"AI 回答内容为空{detail}，请检查 AI 服务状态")
+        return text
 
     def hover_message(self, message: Locator) -> Locator:
         """悬浮消息，显示其操作按钮（复制 / 删除），返回操作区定位器。"""
